@@ -1,0 +1,264 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Buzzed | Attendance Scanner</title>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding: 24px 16px;
+      background: #101010;
+      color: #fff;
+      font-family: Arial, sans-serif;
+      text-align: center;
+    }
+    .container { max-width: 480px; margin: auto; }
+    .brand {
+      font-size: 34px;
+      font-weight: 900;
+      letter-spacing: 5px;
+      margin: 12px 0 4px;
+    }
+    .subtitle {
+      color: #aaa;
+      font-size: 12px;
+      letter-spacing: 3px;
+      margin-bottom: 28px;
+    }
+    .panel {
+      background: #1c1c1c;
+      border: 1px solid #383838;
+      border-radius: 16px;
+      padding: 18px;
+    }
+    #reader {
+      overflow: hidden;
+      border-radius: 12px;
+      background: #000;
+    }
+    #reader video { border-radius: 12px; }
+    button {
+      width: 100%;
+      padding: 15px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 9px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    .primary { background: #fff; color: #111; }
+    .secondary { background: #333; color: #fff; }
+    #result {
+      display: none;
+      margin-top: 16px;
+      padding: 18px;
+      border-radius: 12px;
+      overflow-wrap: anywhere;
+    }
+    #result h2 { margin: 0 0 10px; font-size: 20px; }
+    #result p { margin: 6px 0; }
+    .success { background: #123b28; border: 1px solid #2e8b57; }
+    .warning { background: #493816; border: 1px solid #c99b36; }
+    .error { background: #481e22; border: 1px solid #bd454d; }
+    .hint { color: #aaa; font-size: 12px; line-height: 1.5; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <div class="brand">BUZZED</div>
+    <div class="subtitle">OFFICIAL ATTENDANCE SCANNER</div>
+
+    <section class="panel">
+      <div id="reader"></div>
+      <button id="startBtn" class="primary">START SCANNER</button>
+      <button id="stopBtn" class="secondary">STOP SCANNER</button>
+
+      <div id="result" role="status" aria-live="polite">
+        <h2 id="resultTitle"></h2>
+        <p id="resultName"></p>
+        <p id="resultMessage"></p>
+      </div>
+    </section>
+
+    <p class="hint">
+      Scan an attendee's Buzzed QR code. Keep this page open while checking
+      attendees in. Camera access requires HTTPS and your permission.
+    </p>
+  </main>
+
+<script>
+  const WEB_APP_URL =
+    "https://script.google.com/macros/s/AKfycbzXPrP19y9mVYUWhTx2k-8elFlN3Jt4wqnIp2uGyn7PclL6C7D90iIX6mtmgLhgyPEV/exec";
+
+  const reader = new Html5Qrcode("reader");
+  const resultBox = document.getElementById("result");
+  const resultTitle = document.getElementById("resultTitle");
+  const resultName = document.getElementById("resultName");
+  const resultMessage = document.getElementById("resultMessage");
+
+  let scanning = false;
+  let processing = false;
+  let lastScanned = "";
+
+  function showResult(type, title, name, message) {
+    resultBox.className = type;
+    resultTitle.textContent = title;
+    resultName.textContent = name || "";
+    resultMessage.textContent = message || "";
+    resultBox.style.display = "block";
+  }
+
+  function extractId(decodedText) {
+    try {
+      const url = new URL(decodedText);
+
+      // Accept only QR links from the configured Apps Script deployment.
+      if (
+        url.hostname !== "script.google.com" ||
+        !url.pathname.endsWith("/exec")
+      ) {
+        return null;
+      }
+
+      return url.searchParams.get("id");
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function checkIn(id) {
+    return new Promise((resolve, reject) => {
+      const callbackName =
+        "buzzedJsonp_" + Date.now() + "_" +
+        Math.random().toString(36).slice(2);
+
+      const script = document.createElement("script");
+      let finished = false;
+
+      const cleanup = () => {
+        delete window[callbackName];
+        script.remove();
+      };
+
+      const timeout = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        cleanup();
+        reject(new Error("The check-in server did not respond. Please try again."));
+      }, 15000);
+
+      window[callbackName] = data => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+        cleanup();
+        resolve(data);
+      };
+
+      script.onerror = () => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeout);
+        cleanup();
+        reject(new Error("Could not connect to the check-in server."));
+      };
+
+      script.src = WEB_APP_URL +
+        "?id=" + encodeURIComponent(id) +
+        "&callback=" + encodeURIComponent(callbackName) +
+        "&_=" + Date.now();
+
+      document.body.appendChild(script);
+    });
+  }
+
+  async function onScan(decodedText) {
+    if (processing || decodedText === lastScanned) return;
+
+    const id = extractId(decodedText);
+    if (!id) {
+      lastScanned = decodedText;
+      showResult("error", "INVALID QR CODE", "", "This is not a valid Buzzed check-in QR link.");
+      setTimeout(() => { lastScanned = ""; }, 2500);
+      return;
+    }
+
+    processing = true;
+    lastScanned = decodedText;
+    showResult("", "CHECKING ATTENDANCE…", "", "Please wait.");
+
+    try {
+      const data = await checkIn(id);
+
+      if (data && data.ok) {
+        showResult(
+          "success",
+          "CHECK-IN SUCCESSFUL",
+          data.name || "",
+          data.timestamp ? "Checked in at " + data.timestamp : "Attendance recorded."
+        );
+      } else if (data && data.already) {
+        showResult(
+          "warning",
+          "ALREADY CHECKED IN",
+          data.name || "",
+          "This attendee has already been checked in."
+        );
+      } else {
+        showResult(
+          "error",
+          "CHECK-IN FAILED",
+          data && data.name ? data.name : "",
+          data && data.message ? data.message : "Please verify the QR code."
+        );
+      }
+    } catch (error) {
+      showResult("error", "CONNECTION ERROR", "", error.message);
+    } finally {
+      processing = false;
+      setTimeout(() => { lastScanned = ""; }, 2500);
+    }
+  }
+
+  async function startScanner() {
+    if (scanning) return;
+
+    try {
+      await reader.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        onScan
+      );
+      scanning = true;
+    } catch (error) {
+      showResult(
+        "error",
+        "CAMERA UNAVAILABLE",
+        "",
+        "Allow camera access and open this page over HTTPS. " + error.message
+      );
+    }
+  }
+
+  async function stopScanner() {
+    if (!scanning) return;
+
+    try {
+      await reader.stop();
+      scanning = false;
+    } catch (error) {
+      showResult("error", "SCANNER ERROR", "", error.message);
+    }
+  }
+
+  document.getElementById("startBtn").addEventListener("click", startScanner);
+  document.getElementById("stopBtn").addEventListener("click", stopScanner);
+</script>
+</body>
+</html>
