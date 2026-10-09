@@ -6,9 +6,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111111">
   <title>Buzzed × Moffs | QR Scanner</title>
+
   <script src="https://unpkg.com/html5-qrcode"></script>
+
   <style>
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
 
     body {
       margin: 0;
@@ -78,9 +82,20 @@
       margin-top: 12px;
     }
 
-    .primary { background: #fff; color: #111; }
-    .secondary { background: #333; color: #fff; }
-    button:disabled { opacity: .45; cursor: not-allowed; }
+    .primary {
+      background: #fff;
+      color: #111;
+    }
+
+    .secondary {
+      background: #333;
+      color: #fff;
+    }
+
+    button:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
 
     .note {
       color: #999;
@@ -91,125 +106,168 @@
     }
   </style>
 </head>
+
 <body>
-<main>
-  <div class="brand">BUZZED × MOFFS</div>
-  <h1>QR CHECK-IN</h1>
-  <div class="subtitle">Event staff registration scanner</div>
+  <main>
+    <div class="brand">BUZZED × MOFFS</div>
+    <h1>QR CHECK-IN</h1>
+    <div class="subtitle">Event staff registration scanner</div>
 
-  <section class="panel">
-    <div id="reader"></div>
+    <section class="panel">
+      <div id="reader"></div>
 
-    <div id="status" role="status" aria-live="polite">
-      Tap Start Scanner and allow camera access.
-    </div>
+      <div id="status" role="status" aria-live="polite">
+        Tap Start Scanner and allow camera access.
+      </div>
 
-    <button class="primary" id="start">Start Scanner</button>
-    <button class="secondary" id="open" disabled>
-      Open Check-in Link
-    </button>
-    <button class="secondary" id="reset" disabled>
-      Scan Next Attendee
-    </button>
-  </section>
+      <button class="primary" id="start">
+        Start Scanner
+      </button>
 
-  <p class="note">
-    Scan official Buzzed × Moffs registration QR codes only.
-    Verify the attendee's result before allowing entry.
-  </p>
-</main>
+      <button class="secondary" id="open" disabled>
+        Open Check-in Link
+      </button>
 
-<script>
-  const statusBox = document.getElementById("status");
-  const startBtn = document.getElementById("start");
-  const openBtn = document.getElementById("open");
-  const resetBtn = document.getElementById("reset");
+      <button class="secondary" id="reset" disabled>
+        Scan Next Attendee
+      </button>
+    </section>
 
-  let scanner = null;
-  let scannedUrl = "";
-  let locked = false;
+    <p class="note">
+      Scan official Buzzed × Moffs registration QR codes only.
+      Verify the attendee's result before allowing entry.
+    </p>
+  </main>
 
-  function showStatus(message) {
-    statusBox.textContent = message;
-  }
+  <script>
+    const statusBox = document.getElementById("status");
+    const startBtn = document.getElementById("start");
+    const openBtn = document.getElementById("open");
+    const resetBtn = document.getElementById("reset");
 
-  async function startScanner() {
-    startBtn.disabled = true;
+    let scanner = null;
+    let scannedUrl = "";
+    let locked = false;
 
-    try {
-      if (!scanner) {
-        scanner = new Html5Qrcode("reader");
+    function showStatus(message) {
+      statusBox.textContent = message;
+    }
+
+    function getRegistrationUrl(decodedText) {
+      let url = new URL(decodedText);
+
+      // Handle a QuickChart QR URL containing the real link.
+      if (
+        url.hostname === "quickchart.io" &&
+        url.pathname === "/qr"
+      ) {
+        const embeddedLink = url.searchParams.get("text");
+
+        if (!embeddedLink) {
+          throw new Error("Missing registration link");
+        }
+
+        url = new URL(embeddedLink);
       }
 
-      await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 240, height: 240 } },
-        async (decodedText) => {
-          if (locked) return;
+      // Accept only our Google Apps Script web-app links.
+      if (
+        url.protocol !== "https:" ||
+        url.hostname !== "script.google.com" ||
+        !url.pathname.endsWith("/exec") ||
+        !url.searchParams.get("id")
+      ) {
+        throw new Error("Unrecognized registration QR");
+      }
 
-          let url;
-          try {
-            url = new URL(decodedText);
-          } catch {
-            showStatus("Invalid QR code: this is not a valid link.");
-            return;
-          }
-
-          if (
-            url.protocol !== "https:" ||
-            !url.pathname.endsWith("/exec") ||
-            !url.searchParams.has("id")
-          ) {
-            showStatus(
-              "Unrecognized QR code. Please scan an official registration QR."
-            );
-            return;
-          }
-
-          locked = true;
-          scannedUrl = url.href;
-
-          try {
-            await scanner.stop();
-          } catch (_) {}
-
-          showStatus(
-            "QR code detected. Tap Open Check-in Link to verify this registration."
-          );
-          openBtn.disabled = false;
-          resetBtn.disabled = false;
-          startBtn.disabled = true;
-        },
-        () => {}
-      );
-
-      showStatus("Scanner active. Point the camera at an attendee QR code.");
-    } catch (error) {
-      showStatus(
-        "Camera could not start. Allow camera access and open this page over HTTPS."
-      );
-      startBtn.disabled = false;
+      return url.href;
     }
-  }
 
-  startBtn.addEventListener("click", startScanner);
+    async function startScanner() {
+      startBtn.disabled = true;
 
-  openBtn.addEventListener("click", () => {
-    if (!scannedUrl) return;
-    window.open(scannedUrl, "_blank", "noopener");
-    showStatus(
-      "Check-in link opened in a new tab. Read the result before admitting the attendee."
-    );
-  });
+      try {
+        if (!scanner) {
+          scanner = new Html5Qrcode("reader");
+        }
 
-  resetBtn.addEventListener("click", async () => {
-    scannedUrl = "";
-    locked = false;
-    openBtn.disabled = true;
-    resetBtn.disabled = true;
-    startBtn.disabled = false;
-    showStatus("Ready to scan the next attendee.");
-  });
-</script>
+        await scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 240, height: 240 }
+          },
+          async (decodedText) => {
+            if (locked) return;
+
+            let registrationUrl;
+
+            try {
+              registrationUrl = getRegistrationUrl(decodedText);
+            } catch (error) {
+              showStatus(
+                "Unrecognized QR code. Please scan an official registration QR."
+              );
+              return;
+            }
+
+            locked = true;
+            scannedUrl = registrationUrl;
+
+            try {
+              await scanner.stop();
+            } catch (error) {
+              // Continue if the camera has already stopped.
+            }
+
+            showStatus(
+              "QR code detected. Tap Open Check-in Link to verify this registration."
+            );
+
+            openBtn.disabled = false;
+            resetBtn.disabled = false;
+            startBtn.disabled = true;
+          },
+          () => {
+            // Ignore ordinary camera frames without a QR match.
+          }
+        );
+
+        showStatus(
+          "Scanner active. Point the camera at an attendee QR code."
+        );
+
+      } catch (error) {
+        showStatus(
+          "Camera could not start. Allow camera access and open this page over HTTPS."
+        );
+
+        startBtn.disabled = false;
+      }
+    }
+
+    startBtn.addEventListener("click", startScanner);
+
+    openBtn.addEventListener("click", () => {
+      if (!scannedUrl) return;
+
+      window.open(scannedUrl, "_blank");
+
+      showStatus(
+        "Check-in link opened in a new tab. Read the result before admitting the attendee."
+      );
+    });
+
+    resetBtn.addEventListener("click", () => {
+      scannedUrl = "";
+      locked = false;
+
+      openBtn.disabled = true;
+      resetBtn.disabled = true;
+      startBtn.disabled = false;
+
+      showStatus("Ready to scan the next attendee.");
+    });
+  </script>
 </body>
 </html>
