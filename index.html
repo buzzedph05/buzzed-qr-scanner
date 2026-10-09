@@ -4,42 +4,66 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Buzzed × Moffs | QR Check-in</title>
+  <title>Buzzed × Moffs | Check-in</title>
   <script src="https://unpkg.com/html5-qrcode"></script>
   <style>
     * { box-sizing: border-box; }
     body {
-      margin: 0; padding: 28px 16px; min-height: 100vh;
-      background: #111; color: #fff; font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 28px 16px;
+      background: #111;
+      color: #fff;
+      font-family: Arial, sans-serif;
     }
     main { max-width: 480px; margin: auto; }
     .brand {
-      text-align: center; font-size: 13px; letter-spacing: 3px;
-      color: #ccc;
+      text-align: center;
+      letter-spacing: 4px;
+      color: #aaa;
+      font-size: 13px;
     }
-    h1 { text-align: center; font-size: 29px; }
-    .subtitle { text-align: center; color: #aaa; font-size: 14px; }
+    h1 { text-align: center; font-size: 28px; }
+    .subtitle {
+      text-align: center;
+      color: #aaa;
+      font-size: 14px;
+    }
     .panel {
-      margin-top: 24px; background: #1d1d1d; border: 1px solid #333;
-      border-radius: 16px; padding: 18px;
+      margin-top: 24px;
+      padding: 18px;
+      background: #1d1d1d;
+      border: 1px solid #333;
+      border-radius: 16px;
     }
-    #reader { width: 100%; overflow: hidden; border-radius: 10px; }
+    #reader { width: 100%; overflow: hidden; }
     #status {
-      margin-top: 16px; padding: 16px; background: #292929;
-      border-radius: 10px; font-size: 15px; line-height: 1.6;
-      overflow-wrap: anywhere; white-space: pre-wrap;
+      margin-top: 16px;
+      padding: 18px;
+      background: #292929;
+      border-radius: 10px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      line-height: 1.6;
     }
     button {
-      width: 100%; padding: 14px; margin-top: 12px; border: 0;
-      border-radius: 9px; font-size: 15px; font-weight: bold;
+      width: 100%;
+      padding: 15px;
+      margin-top: 12px;
+      border: 0;
+      border-radius: 9px;
+      font-size: 15px;
+      font-weight: bold;
       cursor: pointer;
     }
-    #start { background: #fff; color: #111; }
-    #next { background: #333; color: #fff; }
-    button:disabled { opacity: .45; cursor: not-allowed; }
+    #start { background: white; color: #111; }
+    #next { background: #444; color: white; }
+    button:disabled { opacity: .45; }
     .note {
-      text-align: center; color: #999; font-size: 12px;
-      line-height: 1.5; margin-top: 20px;
+      color: #999;
+      font-size: 12px;
+      text-align: center;
+      line-height: 1.5;
+      margin-top: 20px;
     }
   </style>
 </head>
@@ -47,179 +71,185 @@
 <main>
   <div class="brand">BUZZED × MOFFS</div>
   <h1>QR CHECK-IN</h1>
-  <div class="subtitle">Event staff registration scanner</div>
+  <div class="subtitle">Official event attendance scanner</div>
 
   <section class="panel">
     <div id="reader"></div>
-    <div id="status">Tap Start Scanner and allow camera access.</div>
+    <div id="status">Tap Start Scanner to begin.</div>
     <button id="start">Start Scanner</button>
     <button id="next" disabled>Scan Next Attendee</button>
   </section>
 
   <p class="note">
-    Scan official registration QR codes only.
     Wait for the check-in result before admitting an attendee.
+    Previously checked-in registrations will be flagged.
   </p>
 </main>
 
 <script>
-  const statusBox = document.getElementById("status");
-  const startBtn = document.getElementById("start");
-  const nextBtn = document.getElementById("next");
+const statusBox = document.getElementById("status");
+const startBtn = document.getElementById("start");
+const nextBtn = document.getElementById("next");
 
-  let scanner = null;
-  let locked = false;
-  let busy = false;
-  let cameraRunning = false;
+let scanner;
+let locked = false;
+let running = false;
+let busy = false;
 
-  function show(message) {
-    statusBox.textContent = message;
+function show(message) {
+  statusBox.textContent = message;
+}
+
+function parseQR(text) {
+  let url = new URL(text);
+
+  if (url.hostname === "quickchart.io" && url.pathname === "/qr") {
+    const embedded = url.searchParams.get("text");
+    if (!embedded) throw new Error("QR link is missing.");
+    url = new URL(embedded);
   }
 
-  function getRegistration(text) {
-    let url = new URL(text);
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== "script.google.com" ||
+    !url.pathname.endsWith("/exec") ||
+    !url.searchParams.get("id")
+  ) {
+    throw new Error("This QR code is not a valid event registration.");
+  }
 
-    // Accept QR codes containing a QuickChart QR-image URL.
-    if (url.hostname === "quickchart.io" && url.pathname === "/qr") {
-      const embedded = url.searchParams.get("text");
-      if (!embedded) throw new Error("QR has no registration link.");
-      url = new URL(embedded);
+  return {
+    endpoint: url.origin + url.pathname,
+    id: url.searchParams.get("id")
+  };
+}
+
+function sendCheckIn(endpoint, id) {
+  return new Promise((resolve, reject) => {
+    const callback = "buzzedResult_" + Date.now();
+    const script = document.createElement("script");
+    let finished = false;
+
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(
+        "The check-in server did not respond. Check the web app deployment."
+      ));
+    }, 20000);
+
+    function cleanup() {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      delete window[callback];
+      script.remove();
     }
 
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== "script.google.com" ||
-      !url.pathname.endsWith("/exec") ||
-      !url.searchParams.get("id")
-    ) {
-      throw new Error("This is not a valid registration QR code.");
-    }
-
-    return {
-      endpoint: url.origin + url.pathname,
-      id: url.searchParams.get("id")
+    window[callback] = result => {
+      cleanup();
+      resolve(result);
     };
-  }
 
-  function checkIn(endpoint, id) {
-    return new Promise((resolve, reject) => {
-      const callbackName = "buzzedCheckInCallback";
-      const script = document.createElement("script");
-      let finished = false;
+    script.onerror = () => {
+      cleanup();
+      reject(new Error(
+        "Unable to contact Google Apps Script. The deployed web app may be unavailable."
+      ));
+    };
 
-      const timeout = setTimeout(() => {
-        finish();
-        reject(new Error("Check-in timed out. Check your connection and try again."));
-      }, 20000);
+    const url = new URL(endpoint);
+    url.searchParams.set("id", id);
+    url.searchParams.set("callback", callback);
+    url.searchParams.set("_", String(Date.now()));
 
-      function finish() {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timeout);
-        delete window[callbackName];
-        script.remove();
-      }
-
-      window[callbackName] = (result) => {
-        finish();
-        resolve(result);
-      };
-
-      script.onerror = () => {
-        finish();
-        reject(new Error("Could not contact the check-in service. Please try again."));
-      };
-
-      const url = new URL(endpoint);
-      url.searchParams.set("id", id);
-      url.searchParams.set("callback", callbackName);
-      url.searchParams.set("_", String(Date.now()));
-      script.src = url.href;
-      document.body.appendChild(script);
-    });
-  }
-
-  async function handleScan(decodedText) {
-    if (locked || busy) return;
-    locked = true;
-    busy = true;
-    startBtn.disabled = true;
-    nextBtn.disabled = true;
-
-    try {
-      const registration = getRegistration(decodedText);
-
-      if (cameraRunning && scanner) {
-        try {
-          await scanner.stop();
-          cameraRunning = false;
-        } catch (_) {}
-      }
-
-      show("QR recognized.\nProcessing check-in…");
-
-      const result = await checkIn(registration.endpoint, registration.id);
-
-      if (result.ok) {
-        show(
-          "✓ CHECK-IN SUCCESSFUL!\n\n" +
-          "Attendee: " + result.name + "\n" +
-          "Registration ID: " + result.id + "\n" +
-          "Time: " + result.timestamp
-        );
-      } else if (result.already) {
-        show(
-          "⚠ ALREADY CHECKED IN\n\n" +
-          "Attendee: " + result.name + "\n" +
-          "Registration ID: " + result.id + "\n\n" +
-          "Do not check this attendee in again."
-        );
-      } else {
-        show("CHECK-IN FAILED\n\n" + (result.message || "Registration not found."));
-      }
-    } catch (error) {
-      show("CHECK-IN ERROR\n\n" + error.message);
-    } finally {
-      busy = false;
-      nextBtn.disabled = false;
-    }
-  }
-
-  async function startScanner() {
-    startBtn.disabled = true;
-
-    try {
-      if (!scanner) scanner = new Html5Qrcode("reader");
-
-      await scanner.start(
-        { facingMode: "environment" },
-        { fps: 10, qrbox: { width: 240, height: 240 } },
-        handleScan,
-        () => {}
-      );
-
-      cameraRunning = true;
-      locked = false;
-      show("Scanner active. Point the camera at an attendee's QR code.");
-    } catch (error) {
-      show("Camera could not start. Allow camera access and use the HTTPS website.");
-      startBtn.disabled = false;
-    }
-  }
-
-  startBtn.addEventListener("click", startScanner);
-
-  nextBtn.addEventListener("click", async () => {
-    locked = false;
-    nextBtn.disabled = true;
-    show("Ready for the next attendee…");
-
-    if (!cameraRunning) {
-      await startScanner();
-    } else {
-      startBtn.disabled = true;
-    }
+    script.src = url.href;
+    document.body.appendChild(script);
   });
+}
+
+async function handleScan(text) {
+  if (locked || busy) return;
+
+  locked = true;
+  busy = true;
+  nextBtn.disabled = true;
+  startBtn.disabled = true;
+
+  try {
+    const qr = parseQR(text);
+
+    if (running) {
+      try {
+        await scanner.stop();
+        running = false;
+      } catch (_) {}
+    }
+
+    show("QR RECOGNIZED\n\nProcessing check-in...");
+
+    const result = await sendCheckIn(qr.endpoint, qr.id);
+
+    if (result.ok) {
+      show(
+        "✓ CHECK-IN SUCCESSFUL!\n\n" +
+        "Attendee: " + result.name + "\n" +
+        "Registration ID: " + result.id + "\n" +
+        "Time: " + result.timestamp
+      );
+    } else if (result.already) {
+      show(
+        "⚠ ALREADY CHECKED IN\n\n" +
+        "Attendee: " + result.name + "\n" +
+        "Registration ID: " + result.id + "\n\n" +
+        "This registration was already used."
+      );
+    } else {
+      show("CHECK-IN FAILED\n\n" +
+        (result.message || "Registration not found."));
+    }
+  } catch (error) {
+    show("CHECK-IN ERROR\n\n" + error.message);
+  } finally {
+    busy = false;
+    nextBtn.disabled = false;
+  }
+}
+
+async function startScanner() {
+  startBtn.disabled = true;
+
+  try {
+    if (!scanner) scanner = new Html5Qrcode("reader");
+
+    await scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 240, height: 240 } },
+      handleScan,
+      () => {}
+    );
+
+    running = true;
+    locked = false;
+    show("SCANNER ACTIVE\n\nPoint the camera at an attendee's QR code.");
+  } catch (error) {
+    show("Camera could not start. Allow camera access and use the HTTPS site.");
+    startBtn.disabled = false;
+  }
+}
+
+startBtn.addEventListener("click", startScanner);
+
+nextBtn.addEventListener("click", async () => {
+  locked = false;
+  nextBtn.disabled = true;
+  show("Ready to scan the next attendee.");
+
+  if (!running) {
+    await startScanner();
+  } else {
+    startBtn.disabled = true;
+  }
+});
 </script>
 </body>
 </html>
